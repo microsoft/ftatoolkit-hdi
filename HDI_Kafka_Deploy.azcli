@@ -1,0 +1,180 @@
+#----------------------------Variables-----------------------------------------------------------------------#
+#region Login
+    $Location="eastus"
+    $RG="AZU-HDI-PE-RG"
+    $Sub="YOURSUBSCRIPTIONID" 
+
+    # Network
+    $NSG="hdi-kafka-vnet-nsg"
+    $vNet="KafkaVNet"
+    $sNet_HDI="HDISubnet"
+    $sNet_Blob="StorageSubnet"
+    $vNet_Client="hdi-privlink-client-vnet" 
+    $sNet_Client="default"
+
+    # Storage
+    $STA="YOURSTORAGEACCOUNT"
+    $Container="kafka"
+
+    #NAT Gateway
+    $Gateway="hdi-kafka-pl-nat-gateway"
+    $Gateway_PublicIP="pip-ngw-hdi-kafka"
+
+    # HDInsight Clusters
+    $clusterName="hdi-bts-kafka-cluster-YOURINITIALS"
+    $clusterType="kafka"
+    #componentVersion="Hadoop=3.1.0"
+    $httpCredential="YOURSECUREPASSWORDHERE"
+    $clusterSizeInNodes="3"
+    #clusterSizeMin="3"
+    #clusterSizeMax="5"
+    $sshCredentials="YOURSECUREPASSWORDHERE"
+    $clusterVersion="5.0"
+
+    #ssh sshuser@hdi-bts-kafka-cluster-ssh.azurehdinsight.net
+    #https://hdi-bts-kafka.azurehdinsight.net
+#endregion
+
+#Login interactively and set a subscription to be the current active subscription
+az login
+
+#Login with Service Principal
+az login --service-principal --username $appID --password $password --tenant $Tenant 
+    
+az account set --subscription $Sub
+#----------------------------Create the Resource Group-------------------------------------------------------#
+az group create --name $RG --subscription $Sub --location $Location --tags Enviornment="Dev" Application="BTS SWIM Data Ingestion Cluster" Project="BTS-SWIM" BillingCode="Internal" Environment="Test" Customer="BTS"
+
+#----------------------------Create an NSG along with the assocated rules------------------------------------#
+#https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-private-link
+az network nsg create --name $NSG --resource-group $RG --location $Location
+
+# https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-management-ip-addresses
+# https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-create-virtual-network#azure-cli
+# Add rules to the new network security group that allow inbound communication on port 443 from the Azure HDInsight health and management services
+az network nsg rule create --resource-group $RG --nsg-name $NSG --name "hdirule1" --protocol "*" --source-port-range "*" --destination-port-range "443" --source-address-prefix "13.82.225.233" --destination-address-prefix "VirtualNetwork" --access "Allow" --priority 300 --direction "Inbound"
+az network nsg rule create --resource-group $RG --nsg-name $NSG --name "hdirule2" --protocol "*" --source-port-range "*" --destination-port-range "443" --source-address-prefix "40.71.175.99" --destination-address-prefix "VirtualNetwork" --access "Allow" --priority 301 --direction "Inbound"
+az network nsg rule create --resource-group $RG --nsg-name $NSG --name "hdirule3" --protocol "*" --source-port-range "*" --destination-port-range "443" --source-address-prefix "168.61.49.99" --destination-address-prefix "VirtualNetwork" --access "Allow" --priority 302 --direction "Inbound"
+az network nsg rule create --resource-group $RG --nsg-name $NSG --name "hdirule4" --protocol "*" --source-port-range "*" --destination-port-range "443" --source-address-prefix "23.99.5.239" --destination-address-prefix "VirtualNetwork" --access "Allow" --priority 303 --direction "Inbound"
+az network nsg rule create --resource-group $RG --nsg-name $NSG --name "hdirule5" --protocol "*" --source-port-range "*" --destination-port-range "443" --source-address-prefix "168.61.48.131" --destination-address-prefix "VirtualNetwork" --access "Allow" --priority 304 --direction "Inbound"
+az network nsg rule create --resource-group $RG --nsg-name $NSG --name "hdirule6" --protocol "*" --source-port-range "*" --destination-port-range "443" --source-address-prefix "138.91.141.162" --destination-address-prefix "VirtualNetwork" --access "Allow" --priority 305 --direction "Inbound"
+
+$NSG_ID=$(az network nsg show --resource-group $RG --name $NSG --query "id")
+
+#----------------------------Create VNet and Subnets----------------------------------------------------------#
+# 172.23.0.0/16 Create VNet for for HDIinsight Kafka Cluster VMs and create the HDISubnet for those cluster VMs (where Head, Zookeeper and Worker Nodes will live)
+az network vnet create --name $vNet --resource-group $RG --address-prefix 172.23.0.0/22 --subnet-name $sNet_HDI --subnet-prefix 172.23.1.0/24
+
+#Create Subnet where Blob Storage Account can live
+az network vnet subnet create --resource-group $RG --vnet-name $vNet --name $sNet_Blob --address-prefixes 172.23.2.0/24 
+
+#Associate NSG to HDISubnet
+az network vnet subnet update --resource-group $RG --vnet-name $vNet --name $sNet_HDI --set networkSecurityGroup.id=$NSG_ID
+
+#172.24.0.0/24 Create VNet for Client Connectivity
+az network vnet create --name $vNet_Client --resource-group $RG --address-prefix 172.24.0.0/24 --subnet-name $sNet_Client --subnet-prefix 172.24.0.0/26
+
+#https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-private-link
+#https://learn.microsoft.com/en-us/azure/private-link/disable-private-link-service-network-policy
+#https://learn.microsoft.com/en-us/azure/private-link/disable-private-link-service-network-policy#using-azure-cli
+#Only do this if you are going to use Private Link
+#In order to choose a source IP address for your Private Link service, an explicit disable setting privateLinkServiceNetworkPolicies is required on the subnet
+az network vnet subnet update --name $sNet_HDI --resource-group $RG --vnet-name $vNet --disable-private-link-service-network-policies true 
+
+#----------------------------Create a Storage Account--------------------------------------------------------#
+# https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-hadoop-create-linux-clusters-azure-cli
+az storage account create --name $STA --resource-group $RG --https-only true --kind StorageV2 --location $Location --sku Standard_LRS
+
+$AZURE_STORAGE_KEY=$(az storage account keys list --account-name $STA --resource-group $RG --query [0].value -o tsv)
+
+az storage container create --name $Container --account-key $AZURE_STORAGE_KEY --account-name $STA
+
+#----------------------------Deploy a NAT Gateway------------------------------------------------------------#
+# Create a new public IP
+az network public-ip create --resource-group $RG --name $Gateway_PublicIP --sku "Standard"  --allocation-method "Static"
+
+# Create the NAT Gateway
+az network nat gateway create --resource-group $RG --name $Gateway --location $Location --public-ip-addresses  $Gateway_PublicIP --idle-timeout 4
+
+# Associate the NAT Gateway to the HDI subnet
+# https://www.jorgebernhardt.com/how-to-deploy-azure-nat-gateway/
+az network vnet subnet update --resource-group $RG --vnet-name $vNet --name $sNet_HDI --nat-gateway $Gateway
+
+#----------------------------Create an HDInsight Cluster-----------------------------------------------------#
+# https://learn.microsoft.com/en-us/cli/azure/hdinsight?view=azure-cli-latest#az-hdinsight-create
+
+az hdinsight create --name $clusterName --resource-group $RG --type $clusterType --http-password $httpCredential --http-user admin --location $Location --headnode-size "Standard_D3_v2" --zookeepernode-size "Standard_A4_v2" --workernode-count $clusterSizeInNodes --workernode-data-disks-per-node 3 --workernode-size "Standard_D3_V2" --ssh-password $sshCredentials --ssh-user sshuser --storage-account $STA --storage-account-key $AZURE_STORAGE_KEY --storage-container $Container --version $clusterVersion --component-version "kafka=2.4" --vnet-name $vNet --subnet $sNet_HDI --resource-provider-connection Outbound --enable-private-link true
+
+# az hdinsight create --name $clusterName --resource-group $RG --type $clusterType --http-password $httpCredential --http-user admin --location $Location 
+# --headnode-size "Standard_D3_v2" 
+# --zookeepernode-size "Standard_A4_v2" 
+# --workernode-count $clusterSizeInNodes 
+# --workernode-data-disks-per-node 3 
+# --workernode-size "Standard_D3_V2"   #https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-apps-use-edge-node #https://learn.microsoft.com/en-us/samples/azure/azure-quickstart-templates/hdinsight-linux-add-edge-node/
+# --edgenode-size "Standard_D3_V2" --> Remember here we can't use this edgenode parameter because with Azure CLI we can only create an edge node through the script if we are creating a Hadoop or Kafka cluste. Which means we have to create the edge node after we create the cluster.
+# --ssh-password $sshCredentials 
+# --ssh-user sshuser 
+# --storage-account $STA 
+# --storage-account-key $AZURE_STORAGE_KEY 
+# --storage-container $Container 
+# --version $clusterVersion 
+# --component-version "kafka=2.4" 
+# --vnet-name $vNet 
+# --subnet $sNet_HDI 
+# --resource-provider-connection Outbound 
+# --enable-private-link true
+
+#----------------------------Create an HDInsight Edge Node-----------------------------------------------------#
+#We have to create the edge node after we create the cluster if we are create the cluster through Azure CLI
+#At the moment we can only create edge nodes through Azure CLI if we are creating Hadoop and/or Spark Clusters
+#This means we need to do it through an ARM template.
+#https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-apps-use-edge-node 
+#https://learn.microsoft.com/en-us/samples/azure/azure-quickstart-templates/hdinsight-linux-add-edge-node/
+az deployment group create --name EdgeNodeDeployment --resource-group $RG --template-file "./HDIEdgeNode/azuredeploy.json" --parameters "./HDIEdgeNode/azuredeploy.parameters.json"
+
+#----------------------------Create a Private Endpoint-----------------------------------------------------#
+#https://learn.microsoft.com/en-us/cli/azure/network/private-endpoint?view=azure-cli-latest
+#https://learn.microsoft.com/en-us/azure/private-link/create-private-endpoint-cli
+
+$clusterId=$(az hdinsight list --resource-group $RG --query '[].[properties.clusterId]' --output tsv)
+$gatewayname="gateway-"+$clusterId
+$headnodename="headnode-"+$clusterId
+$edgenodename="edgenode1-"+$clusterId
+
+az network private-link-service list --resource-group $RG --query '[].[id]' --output tsv
+$privatelinkserviceresourceId=$(az network private-link-service list --resource-group $RG --query '[].[id]' --output tsv)
+
+#Ambari Private Endpoint
+az network private-endpoint create --resource-group $RG --name hdi-privlink-cluster --nic-name hdi-privlink-cluster-nic --connection-name $gatewayname --private-connection-resource-id $privatelinkserviceresourceId[1] --vnet-name $vNet_Client --subnet $sNet_Client 
+
+#Private endpoint for SSH access
+az network private-endpoint create --resource-group $RG --name hdi-privlink-cluster-ssh --nic-name hdi-privlink-cluster-ssh-nic --connection-name $headnodename --private-connection-resource-id $privatelinkserviceresourceId[2] --vnet-name $vNet_Client --subnet $sNet_Client 
+
+#Edge Node SSH access
+az network private-endpoint create --resource-group $RG --name hdi-privlink-edgenode-ssh --nic-name hdi-privlink-edgenode-ssh-nic --connection-name $edgenodename --private-connection-resource-id $privatelinkserviceresourceId[0] --vnet-name $vNet_Client --subnet $sNet_Client 
+
+#----------------------------Configure DNS to connect over private endpoints-----------------------------------------------------#
+#https://learn.microsoft.com/en-us/azure/private-link/create-private-endpoint-cli
+#Create a new private Azure DNS zone 
+az network private-dns zone create --resource-group $RG --name "privatelink.azurewebsites.net"
+
+#Link the DNS zone to the virtual network
+az network private-dns link vnet create --resource-group $RG --zone-name "privatelink.azurewebsites.net" --name hdi-privlink-client-vnet-link --virtual-network $vNet_Client --registration-enabled false
+
+#Create a DNS record
+$ip1=az network nic show --resource-group $RG --name "hdi-privlink-cluster-nic" --query "ipConfigurations[0].privateIpAddress"
+$ip2=az network nic show --resource-group $RG --name "hdi-privlink-cluster-ssh-nic" --query "ipConfigurations[0].privateIpAddress" 
+$ip3=az network nic show --resource-group $RG --name "hdi-privlink-edgenode-ssh-nic" --query "ipConfigurations[0].privateIpAddress" 
+
+#az network private-dns zone list --resource-group $RG
+az network private-dns record-set a add-record -g $RG -z privatelink.azurewebsites.net -n $clusterName -a $ip1
+az network private-dns record-set a add-record -g $RG -z privatelink.azurewebsites.net -n $clusterName-ssh -a $ip2
+az network private-dns record-set a add-record -g $RG -z privatelink.azurewebsites.net -n edgenode.$clusterName-ssh -a $ip3
+
+#----------------------------Configure DNS to connect over private endpoints-----------------------------------------------------#
+#Create a test virtual machine so that you can RDP onto it and test the ambari front end and test ssh access to the HDInsight Cluster
+#https://learn.microsoft.com/en-us/cli/azure/vm?view=azure-cli-latest#az-vm-create
+az vm create --resource-group $RG --name hdi-privlink-client-vm --image Win2019Datacenter --public-ip-address "" --vnet-name $vNet_Client --subnet default --admin-username NodeVMAdmin --admin-password "NodeVMAZU)7)7" --os-disk-delete-option Delete --nic-delete-option Delete
+
+#----------------------------Delete Resource Group-----------------------------------------------------#
+az group delete --name $RG --no-wait --yes
