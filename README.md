@@ -1,14 +1,9 @@
-# Project
+# Deploy an HDInsight Cluster Using Private Link
 
-> This repo has been populated by an initial template to help get you started. Please
-> make sure to update the content to build a great experience for community-building.
+> Great Azure CLI Script that will help you deploy an HDInsight Cluster using Private Endpoints
+> [For documentation click here](https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-private-link)
 
-As the maintainer of this project, please make a few updates:
 
-- Improving this README.MD file to provide a great experience
-- Updating SUPPORT.MD with content about this project's support experience
-- Understanding the security reporting process in SECURITY.MD
-- Remove this section from the README
 
 ## Contributing
 
