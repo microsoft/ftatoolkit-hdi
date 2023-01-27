@@ -1,6 +1,9 @@
-## Deploy an HDInsight Cluster Using Private Link
 
-Great Azure CLI Script that will help you deploy an HDInsight Cluster using Private Endpoints
+## <img src="Assets/images/hdinsightpl.png" alt="FTA Toolkit: HDInsight Deployment Accelerator" style="float: left; margin-right:10px;" />
+&nbsp;
+
+### HDInsight Cluster Using Private Link Deployment Accelerator
+ If you're ever in need of deploying an HD Insight Kafka Cluster using Private Endpoints here is an AZ CLI script that will walk you through the process. Getting HD Insight to work with Private Endpoints can be a bit tricky, so to make it easier here is an Azure CLI Script that will walk you through the process of creating your Resource Group, VNet, Subnets, Storage Account, NAT Gateway, HDInsight Kafka Cluster, Edge Node, Private Endpoints, DNS Configuration and VM to login and test the cluster access.
 
 [For additional documentation click here](https://learn.microsoft.com/en-us/azure/hdinsight/hdinsight-private-link)
 
